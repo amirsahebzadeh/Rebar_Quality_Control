@@ -1,0 +1,83 @@
+#Installing Detectron2 platform
+!python -m pip install pyyaml==5.1
+import sys, os, distutils.core
+!git clone 'https://github.com/facebookresearch/detectron2' #Loading from github
+dist = distutils.core.run_setup("./detectron2/setup.py")
+!python -m pip install {' '.join([f"'{x}'" for x in dist.install_requires])}
+sys.path.insert(0, os.path.abspath('./detectron2'))
+
+#importing torch and detectron2 and their version for compatibility
+import torch, detectron2
+from detectron2.utils.logger import setup_logger
+setup_logger()
+!nvcc --version
+TORCH_VERSION = ".".join(torch.__version__.split(".")[:2])
+CUDA_VERSION = torch.__version__.split("+")[-1]
+print("torch: ", TORCH_VERSION, "; cuda: ", CUDA_VERSION)
+print("detectron2:", detectron2.__version__)
+
+#import common libraries for the computation
+import numpy as np
+import os, json, cv2, random
+from google.colab.patches import cv2_imshow
+import yaml
+
+from detectron2 import model_zoo
+from detectron2.engine import DefaultPredictor
+from detectron2.config import get_cfg
+from detectron2.utils.visualizer import Visualizer
+from detectron2.data import MetadataCatalog, DatasetCatalog
+from detectron2.engine import DefaultTrainer
+from detectron2.evaluation import COCOEvaluator, inference_on_dataset
+from detectron2.data import build_detection_test_loader
+
+#registeration of training and validation dataset
+from detectron2.data.datasets import register_coco_instances
+register_coco_instances("my_dataset_train", {}, "path to the JSON file of training", "path to the directory file of training")
+register_coco_instances("my_dataset_val", {}, "path to the JSON file of validation", "path to the directory file of validation")
+train_metadata = MetadataCatalog.get("my_dataset_train")
+train_dataset_dicts = DatasetCatalog.get("my_dataset_train")
+val_metadata = MetadataCatalog.get("my_dataset_val")
+val_dataset_dicts = DatasetCatalog.get("my_dataset_val")
+
+#Setting up the configuration
+cfg = get_cfg()
+cfg.OUTPUT_DIR = "/content/drive/MyDrive/ColabNotebooks/models/Detectron2_Models"
+cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")) #This can be changed based on the goal of training to ResNet 101 or Cascade Mask R-CNN for complex images 
+cfg.DATASETS.TRAIN = ("my_dataset_train",)
+cfg.DATASETS.TEST = ()
+cfg.DATALOADER.NUM_WORKERS = 2
+cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
+cfg.SOLVER.IMS_PER_BATCH = 2
+cfg.SOLVER.BASE_LR = 0.00025  # pick a good LR
+cfg.SOLVER.MAX_ITER = 6000    # 1000 iterations seems good enough for this dataset (Model RS = 7500, Model R = 7000, Model S = 6000)
+cfg.SOLVER.STEPS = []        # do not decay learning rate
+cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 256   # Default is 512, using 256 for this dataset.
+cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1 #(Model RS = 2, Model R = 1, Model S = 1)
+os.makedirs(cfg.OUTPUT_DIR, exist_ok=True)
+trainer = DefaultTrainer(cfg) 
+trainer.resume_or_load(resume=False) 
+trainer.train()
+
+
+# Save the configuration
+config_yaml_path = "/content/drive/MyDrive/ColabNotebooks/models/Detectron2_Models/config.yaml"
+with open(config_yaml_path, 'w') as file:
+    yaml.dump(cfg, file)
+
+cfg.MODEL.WEIGHTS = os.path.join(cfg.OUTPUT_DIR, "model_final.pth")  # saving the final model
+cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5   # set a custom testing threshold but for first try 0.5 is the best
+predictor = DefaultPredictor(cfg)
+
+#Evaluating the model
+evaluator = COCOEvaluator("my_dataset_val", output_dir="./output")
+val_loader = build_detection_test_loader(cfg, "my_dataset_val")
+print(inference_on_dataset(predictor.model, val_loader, evaluator)
+
+
+#Model Performance on an image
+new_im = cv2.imread("Path of your image.PNG")
+outputs  = predictor(new_im)
+v = Visualizer(new_im[:, :, ::-1], metadata=train_metadata)
+out = v.draw_instance_predictions(outputs["instances"].to("cpu"))
+cv2_imshow(out.get_image()[:, :, ::-1])
