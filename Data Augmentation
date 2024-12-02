@@ -7,7 +7,6 @@ def augment_image(image_path):
     # Read the image
     image = cv2.imread(image_path)
     
-    # Define individual augmenters
     augmenters = [
         # Horizontal flip
         iaa.Fliplr(1.0),
@@ -40,14 +39,13 @@ def augment_image(image_path):
         ])
     ]
     
-    # Apply each augmentation independently and save/display the results
     for i, augmenter in enumerate(augmenters):
         augmented_image = augmenter(image=image)
         window_name = f'Augmented Image {i+1}'
         cv2.imshow(window_name, augmented_image)
         cv2.imwrite(f'augmented_image_{i+1}.jpg', augmented_image)
     
-    # Display original image
+    # Display original image and its comparison with the augmented images
     cv2.imshow('Original Image', image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
