@@ -1,0 +1,191 @@
+#Intsalling Detectron2
+!python -m pip install pyyaml==5.1
+import sys, os, distutils.core
+# Note: This is a faster way to install detectron2 in Colab, but it does not include all functionalities (e.g. compiled operators).
+# See https://detectron2.readthedocs.io/tutorials/install.html for full installation instructions
+!git clone 'https://github.com/facebookresearch/detectron2'
+dist = distutils.core.run_setup("./detectron2/setup.py")
+!python -m pip install {' '.join([f"'{x}'" for x in dist.install_requires])}
+sys.path.insert(0, os.path.abspath('./detectron2'))
+
+#Importing libraries
+import torch
+import cv2
+import numpy as np
+from detectron2.engine import DefaultPredictor
+from detectron2.config import get_cfg
+from detectron2.utils.visualizer import Visualizer
+from detectron2.data import MetadataCatalog
+import matplotlib.pyplot as plt
+
+#Load the instance segmentation model
+# Load the configuration used during training
+cfg = get_cfg()
+cfg.merge_from_file("/content/drive/MyDrive/ColabNotebooks/models/Detectron2_Models_Model_S/config.yaml")  # Replace with your config file
+cfg.MODEL.WEIGHTS = "/content/drive/MyDrive/ColabNotebooks/models/Detectron2_Models_Model_S/model_final.pth"  # Replace with the path to your trained model weights
+cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5 
+cfg.MODEL.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+predictor = DefaultPredictor(cfg)
+
+#Do segmentation on an image
+image_path = "/content/drive/MyDrive/Thesis- Model3/Test/IMG_4649.JPG"  
+image = cv2.imread(image_path)
+image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+outputs = predictor(image)
+print(outputs)
+
+v = Visualizer(image, MetadataCatalog.get(cfg.DATASETS.TRAIN[0]), scale=2)
+v = v.draw_instance_predictions(outputs["instances"].to("cpu"))
+plt.imshow(v.get_image())
+plt.axis("off")
+plt.show()
+
+#Converting to Binary Image
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+instances = outputs["instances"]
+if "pred_masks" in instances.get_fields():
+    masks = instances.pred_masks.to("cpu").numpy()  # Convert to numpy
+else:
+    print("No masks detected in the output.")
+    masks = None
+
+if masks is not None:
+    binary_mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+    for mask in masks:
+        binary_mask = np.logical_or(binary_mask, mask).astype(np.uint8)
+    binary_image = (binary_mask * 255).astype(np.uint8)
+    plt.imshow(binary_image, cmap="gray")
+    plt.axis("off")
+    plt.title("Binary Prediction Image")
+    plt.show()
+
+    # Annotate the instance numbers on the binary mask
+    for idx, (x_center, y_center) in enumerate(instance_centroids):
+        cv2.putText(
+            binary_image_color,
+            str(idx + 1),  # Instance number (starting from 1)
+            (x_center, y_center),  # Position near the centroid
+            cv2.FONT_HERSHEY_SIMPLEX,  # Font
+            10,  # Font scale
+            (255, 0, 0),  # Text color (blue)
+            2,  # Thickness
+            cv2.LINE_AA,
+        )
+    plt.imshow(cv2.cvtColor(binary_image_color, cv2.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.title("Binary Mask with Instance Numbers")
+    plt.show()
+
+#Finding the critical points for calculating the angle of hook
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+if masks is not None:
+    # Create a blank binary image
+    binary_mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+    for mask in masks:
+        binary_mask = np.logical_or(binary_mask, mask.astype(np.uint8)).astype(np.uint8) * 255
+    annotated_image = cv2.cvtColor(binary_mask, cv2.COLOR_GRAY2BGR)
+    selected_points = []  # To store selected points for each instance
+
+    # Loop through each mask and find contours
+    for idx, mask in enumerate(masks):
+        # Convert mask to binary format
+        binary_mask_single = mask.astype(np.uint8) * 255
+
+        # Find contours for the current mask
+        contours, _ = cv2.findContours(binary_mask_single, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if len(contours) > 0:
+            # Assuming the largest contour is the main one
+            contour = max(contours, key=cv2.contourArea)
+
+            # Convert contour to a numpy array of points
+            points = np.squeeze(contour)
+
+            # Find the point with the highest X value
+            highest_x_point = points[np.argmax(points[:, 0])]
+
+            # Find the point with the highest Y value
+            highest_y_point = points[np.argmax(points[:, 1])]
+
+            selected_points.append({
+                "instance": idx + 1,
+                "highest_x_point": tuple(highest_x_point),
+                "highest_y_point": tuple(highest_y_point)
+            })
+
+            cv2.circle(annotated_image, tuple(highest_x_point), 40, (255, 255, 0), -1)  # Yellow for highest X
+            cv2.putText(annotated_image, f"High X", tuple(highest_x_point),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            cv2.circle(annotated_image, tuple(highest_y_point), 40, (255, 0, 0), -1)  # Blue for highest Y
+            cv2.putText(annotated_image, f"High Y", tuple(highest_y_point),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+    # Add additional points which in some cases can be the average of two critical points
+    additional_points = [(870, 1900), . . .]
+    for idx, point in enumerate(additional_points):
+        cv2.circle(annotated_image, point, 30, (0, 255, 255), -1)  # Yellow for additional points
+        cv2.putText(annotated_image, f"Extra {idx + 1}", (point[0] - 20, point[1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+    # Visualize the annotated image
+    plt.imshow(cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.title("Annotated Image with Points")
+    plt.show()
+
+    for sp in selected_points:
+        print(f"Instance {sp['instance']}:")
+        if "lowest_y_point" in sp:
+            print(f"  Lowest Y Point: {sp['lowest_y_point']}")
+        if "lowest_x_point" in sp:
+            print(f"  Lowest X Point: {sp['lowest_x_point']}")
+        if "highest_y_point" in sp:
+            print(f"  Highest Y Point: {sp['highest_y_point']}")
+        if "highest_x_point" in sp:
+            print(f"  Highest X Point: {sp['highest_x_point']}")
+else:
+    print("No masks detected.")
+
+#Drawing lines for points
+import cv2
+import matplotlib.pyplot as plt
+line_points = [
+    ((870, 1900), (1034, 3207)),  # Line 1
+    ((870, 1900), (1913, 1692))   # Line 2
+]
+for idx, (start, end) in enumerate(line_points):
+    cv2.line(annotated_image, start, end, (0, 255, 255), 2) #In this part Yellow
+
+    # Add a label near the start point of the line
+    label_position = (start[0] + 10, start[1] - 10)  # Slightly adjust the position
+    cv2.putText(annotated_image, f"Line {idx + 1}", label_position,
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+plt.imshow(cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB))
+plt.axis("off")
+plt.title("Annotated Image with Lines")
+plt.show()
+
+#Angle Calculation with selected points
+import numpy as np
+import math
+line1 = ((870, 1900), (1034, 3207))  # Line 1
+line2 = ((870, 1900), (1913, 1692))  # Line 2
+def calculate_angle(line1, line2):
+    v1 = np.array([line1[1][0] - line1[0][0], line1[1][1] - line1[0][1]])
+    v2 = np.array([line2[1][0] - line2[0][0], line2[1][1] - line2[0][1]])
+    dot_product = np.dot(v1, v2)
+    magnitude_v1 = np.linalg.norm(v1)
+    magnitude_v2 = np.linalg.norm(v2)
+    cos_theta = dot_product / (magnitude_v1 * magnitude_v2)
+    cos_theta = np.clip(cos_theta, -1.0, 1.0)
+    angle_radians = np.arccos(cos_theta)
+    angle_degrees = math.degrees(angle_radians)
+
+    return angle_degrees
+angle = calculate_angle(line1, line2)
+print(f"Angle between Line 1 and Line 2: {angle:.2f} degrees")
