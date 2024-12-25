@@ -1,0 +1,146 @@
+#Importing Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+
+#Installing Detectron2
+!python -m pip install pyyaml==5.1
+import sys, os, distutils.core
+# Note: This is a faster way to install detectron2 in Colab, but it does not include all functionalities (e.g. compiled operators).
+# See https://detectron2.readthedocs.io/tutorials/install.html for full installation instructions
+!git clone 'https://github.com/facebookresearch/detectron2'
+dist = distutils.core.run_setup("./detectron2/setup.py")
+!python -m pip install {' '.join([f"'{x}'" for x in dist.install_requires])}
+sys.path.insert(0, os.path.abspath('./detectron2'))
+
+#Importong Essential Libraries
+import torch
+import cv2
+import os
+from detectron2.config import get_cfg
+from detectron2.engine import DefaultPredictor
+import matplotlib.pyplot as plt
+from google.colab.patches import cv2_imshow
+from detectron2.utils.visualizer import Visualizer
+from detectron2.data import MetadataCatalog
+
+#Configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+cfg = get_cfg()
+cfg.merge_from_file("/content/drive/MyDrive/ColabNotebooks/models/Detectron2_Models_model_jadid_2/config.yaml")
+cfg.MODEL.WEIGHTS = "/content/drive/MyDrive/ColabNotebooks/models/Detectron2_Models_model_jadid_2/model_final.pth"
+cfg.MODEL.DEVICE = device.type
+cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
+cfg.MODEL.ROI_HEADS.NUM_CLASSES = 1
+
+# Create a Predictor
+predictor = DefaultPredictor(cfg)
+from google.colab import drive
+image_path = '/content/drive/MyDrive/Thesis- Model2/Test/IMG_4355.JPG'
+
+#Instance Segmentation
+image = cv2.imread(image_path)
+outputs = predictor(image)
+# Visualize the instance segmentation results
+v = Visualizer(image[:, :, ::-1], MetadataCatalog.get(cfg.DATASETS.TRAIN[0]), scale=1.2)
+out = v.draw_instance_predictions(outputs["instances"].to("cpu"))
+output_image = out.get_image()[:, :, ::-1]
+cv2_imshow(output_image)
+
+# Extract instances derived form the model
+instances = outputs["instances"].to(device)
+print (instances)
+# Extract masks, boxes, classes, and scores
+pred_masks = instances.pred_masks  # [N, H, W]
+pred_boxes = instances.pred_boxes.tensor
+pred_classes = instances.pred_classes
+scores = instances.scores
+
+#Installing Depth Pro Model for Depth Estimation
+!git clone https://github.com/apple/ml-depth-pro.git
+%cd ml-depth-pro
+!pip install -r requirements.txt
+!pip install -e .
+!bash get_pretrained_models.sh
+sys.path.append('/content/ml-depth-pro/src')
+
+#Import Libraries
+from PIL import Image
+import depth_pro
+import torch
+import numpy as np
+import cv2
+
+#Configuration
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+#Load the Depth Pro and Transformation
+model, transform = depth_pro.create_model_and_transforms()
+model.to(device)
+model.eval()
+
+#Loading the image
+image_cv = cv2.imread(image_path)
+if image_cv is None:
+    print(f"Error: Unable to load image at {image_path}")
+    # Handle the error as needed
+else:
+    print("Image loaded successfully")
+original_height, original_width = image_cv.shape[:2]
+print(f"Original image size: {original_width}x{original_height}")
+
+#Finding the Depth of Each Instance
+#BGR to RBG
+image_pil = Image.fromarray(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB))
+image_transformed = transform(image_pil).unsqueeze(0).to(device)  # Add batch dimension
+f_mm = 2.22 (has to be changed based on the camera)
+sensor_width_mm = 2.4 (has to be changed based on the camera)
+#Calculating the Focal Length
+f_px = (f_mm * original_width) / sensor_width_mm
+print(f"Calculated focal length in pixels (f_px) for original image: {f_px}")
+# Convert f_px to a tensor and ensure it is on the same device as the model
+f_px_tensor = torch.tensor([f_px], dtype=torch.float32, device=device)
+with torch.no_grad():
+    prediction = model.infer(image_transformed, f_px=f_px_tensor)
+depth = prediction["depth"]
+print("Shape of depth before unsqueeze:", depth.shape)
+depth = depth.unsqueeze(0).unsqueeze(0)
+print("Shape of depth after unsqueeze:", depth.shape)
+depth_resized = depth.squeeze(0).squeeze(0).cpu().numpy()
+print("Shape of depth_resized:", depth_resized.shape)
+num_instances = pred_masks.shape[0]
+instance_depths = []
+for i in range(num_instances):
+    mask = pred_masks[i].cpu().numpy().astype(bool)
+    depth_values = depth_resized[mask]
+    mean_depth = depth_values.mean()
+    instance_depths.append(mean_depth)
+    print(f"Instance {i}: Class = {pred_classes[i].item()}, Score = {scores[i].item():.2f}, Mean depth = {mean_depth:.2f} meters")
+
+#Diameter Estimation
+from scipy.spatial.distance import pdist
+def calculate_instance_diameters_calibrated(masks, depth_map, f_px, pixel_to_meter_scale=1.0, calibration_factor=1.0):
+    diameters = []
+    for mask in masks:
+        coords = np.column_stack(np.where(mask))
+        if len(coords) < 2:
+            diameters.append(0)
+            continue
+        distances = pdist(coords)
+        max_pixel_distance = np.max(distances)
+        depth_values = depth_map[mask]
+        average_depth = np.mean(depth_values)
+        diameter_meters = (max_pixel_distance * average_depth) / f_px
+        diameter_meters *= pixel_to_meter_scale / calibration_factor
+        diameters.append(diameter_meters)
+    return diameters
+pixel_to_meter_scale = 1.0 (has to be adjusted)
+calibration_factor = 1.55 (has to be adjusted)
+instance_diameters = calculate_instance_diameters_calibrated(
+    masks=pred_masks.cpu().numpy(),
+    depth_map=depth_resized,
+    f_px=f_px,  # Focal length in pixels
+    pixel_to_meter_scale=pixel_to_meter_scale,
+    calibration_factor=calibration_factor
+)
+for i, diameter in enumerate(instance_diameters):
+    print(f"Instance {i+1}: Calibrated Diameter = {diameter:.4f} meters")
